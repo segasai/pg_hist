@@ -483,6 +483,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 						}
 					}
 				}
+				SPI_freetuptable(SPI_tuptable);
 			}
 		}
 		SPI_cursor_close(port);
