@@ -97,6 +97,7 @@ static int64_t func(Datum *values, bool *isnull, TupleDesc td,
 	{
 		for (i=1; i<=ncols; i++)
 		{
+			char *typ;
 			if (i == 1)
 			{
 				dimmults[i-1] = 1;
@@ -105,7 +106,7 @@ static int64_t func(Datum *values, bool *isnull, TupleDesc td,
 			{
 				dimmults[i-1] = dimmults[i-2] * dims[i-2];
 			}
-			char *typ = SPI_gettype(td, i); // type of column
+			typ = SPI_gettype(td, i); // type of column
 			funcs[i - 1] = NULL;
 			if (strcmp(typ, "int2") == 0) {funcs[i-1] = int16bin;}
 			if (strcmp(typ, "int4") == 0) {funcs[i-1] = int32bin;}
@@ -163,6 +164,8 @@ typedef struct
 
 //PG_FUNCTION_INFO_V1(pg_hist_0);
 
+Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim);
+
 Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 {
 	int proc, callid = 0;
@@ -175,6 +178,8 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 	Datum *elemsp=NULL;
 	bool elmbyval, *nullsp=NULL;
 	int pos, nelemsLen, nelemsMin, nelemsMax;
+	int lastpos, returning;
+
 	int nelem = 1;
 	int64_t* retarr;
 	Oid elmtype;
@@ -185,16 +190,16 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 	MyInfo *info;
 	if (SRF_IS_FIRSTCALL())
 	{
-		Datum *values;
-		bool *isnull;
+		Datum *values = 0;
+		bool *isnull = 0; // to prevent compiler complaints
 		int dimmults[NMAXDIM];
 		MyParam params[NMAXDIM];
 		int (*funcs[NMAXDIM]) (Datum, MyParam *);
 		char *command;
 		text *sql;
+		MemoryContext oldcontext; 
 		
 		funcctx = SRF_FIRSTCALL_INIT();
-		MemoryContext oldcontext; 
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 		
 		dims = (int *)palloc(NMAXDIM * sizeof(int));
@@ -362,8 +367,8 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 	dims = info->dims;
 	nelem = info->nelem;
 	ndim = info->ndim;
-	int lastpos = info->lastpos + 1;
-	int returning = 0;
+	lastpos = info->lastpos + 1;
+	returning = 0;
 	
 	for(;lastpos < nelem; lastpos++)
 	{
