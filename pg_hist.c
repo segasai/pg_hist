@@ -82,20 +82,62 @@ static int numericbin(Datum val, MyParam *par)
 }
 
 
+
+
+static double int16w(Datum val)
+{
+	return (double )DatumGetInt16(val);
+}
+
+static double int32w(Datum val)
+{
+	return (double) DatumGetInt32(val);
+}
+
+static double int64w(Datum val)
+{
+	return (double)DatumGetInt64(val);
+}
+
+static double float32w(Datum val)
+{
+	return (double) DatumGetFloat4(val);
+}
+
+static double float64w(Datum val)
+{
+	return (double) DatumGetFloat8(val);
+}
+
+static double numericw(Datum val)
+{
+	char *tmp;
+	double vald;
+	tmp = DatumGetCString(DirectFunctionCall1(numeric_out, val));
+	vald  = strtod(tmp, NULL);
+	pfree(tmp);
+	return vald;
+}
+
 static int64_t func(Datum *values, bool *isnull, TupleDesc td,
+			int ndim, 
 			double *mins, double *maxs,
 			int *dims, int callid,  int *dimmults,
 			MyParam *params, 
-			int (*funcs[NMAXDIM]) (Datum, MyParam *))
+			int (*funcs[NMAXDIM]) (Datum, MyParam *),
+			double (**funcW) (Datum),
+			int weight_flag,
+			double *weight
+			)
 {
 	
-	int ncols = td->natts;
 	int i;
 	int pos0 = 0;
 
 	if (callid == 0)
 	{
-		for (i=1; i<=ncols; i++)
+
+		for (i=1; i<=ndim; i++)
 		{
 			char *typ;
 			if (i == 1)
@@ -108,12 +150,30 @@ static int64_t func(Datum *values, bool *isnull, TupleDesc td,
 			}
 			typ = SPI_gettype(td, i); // type of column
 			funcs[i - 1] = NULL;
-			if (strcmp(typ, "int2") == 0) {funcs[i-1] = int16bin;}
-			if (strcmp(typ, "int4") == 0) {funcs[i-1] = int32bin;}
-			if (strcmp(typ, "int8") == 0) {funcs[i-1] = int64bin;}
-			if (strcmp(typ, "float4") == 0) {funcs[i-1] = float32bin;}
-			if (strcmp(typ, "float8") == 0) {funcs[i-1] = float64bin;}
-			if (strcmp(typ, "numeric") == 0) {funcs[i-1] = numericbin;}
+			if (strcmp(typ, "int2") == 0)
+			{
+				funcs[i-1] = int16bin;
+			}
+			if (strcmp(typ, "int4") == 0) 
+			{
+				funcs[i-1] = int32bin;
+			}
+			if (strcmp(typ, "int8") == 0) 
+			{
+				funcs[i-1] = int64bin;
+			}
+			if (strcmp(typ, "float4") == 0)
+			{
+				funcs[i-1] = float32bin;
+			}
+			if (strcmp(typ, "float8") == 0)
+			{
+				funcs[i-1] = float64bin;
+			}
+			if (strcmp(typ, "numeric") == 0)
+			{
+				funcs[i-1] = numericbin;
+			}
 			pfree(typ);
 
 			if (funcs[i-1] == NULL)
@@ -124,9 +184,45 @@ static int64_t func(Datum *values, bool *isnull, TupleDesc td,
 			params[i-1].mi = mins[i-1];
 			params[i-1].ma = maxs[i-1];
 			params[i-1].mult = dims[i-1] * 1. / (maxs[i-1] - mins[i-1]);
-		}		
+		}
+		if (weight_flag)
+		{
+			char *typ = SPI_gettype(td, ndim+1); // type of column
+			*funcW = NULL;
+			if (strcmp(typ, "int2") == 0)
+			{
+				*funcW = int16w;
+			}
+			if (strcmp(typ, "int4") == 0) 
+			{
+				*funcW = int32w;
+			}
+			if (strcmp(typ, "int8") == 0) 
+			{
+				*funcW = int64w;
+			}
+			if (strcmp(typ, "float4") == 0)
+			{
+				*funcW = float32w;
+			}
+			if (strcmp(typ, "float8") == 0)
+			{
+				*funcW = float64w;
+			}
+			if (strcmp(typ, "numeric") == 0)
+			{
+				*funcW = numericw;
+			}
+			pfree(typ);
+
+			if (*funcW == NULL)
+			{
+				elog(ERROR, "Wrong type");
+			}
+		}
 	}
-	for (i=0; i<ncols; i++)
+	
+	for (i=0; i<ndim; i++)
 	{
 		if (!isnull[i])
 		{
@@ -140,7 +236,6 @@ static int64_t func(Datum *values, bool *isnull, TupleDesc td,
 			{
 				pos0 += dimmults[i] * posx;			
 			}
-
 		}
 		else
 		{
@@ -148,13 +243,17 @@ static int64_t func(Datum *values, bool *isnull, TupleDesc td,
 			break;
 		}
 	}
+	if (weight_flag)
+	{
+		*weight = (*funcW)(values[ndim]);
+	}
 	return pos0;
 }
 
 
 typedef struct 
 {
-	int64_t *retarr;
+	void *retarr;
 	int *dims;	
 	int nelem;
 	int ndim;
@@ -164,9 +263,9 @@ typedef struct
 
 //PG_FUNCTION_INFO_V1(pg_hist_0);
 
-Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim);
+Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag);
 
-Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
+Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 {
 	int proc, callid = 0;
 	double mins[NMAXDIM];
@@ -181,13 +280,16 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 	int lastpos, returning;
 
 	int nelem = 1;
-	int64_t* retarr;
+	void* retarr;
+	int64_t *retarr_i=0;
+	float8 *retarr_d=0;
 	Oid elmtype;
 	int16_t elmlen;
 	char elmalign = 0;
-	ArrayType *minArr, *maxArr, *lenArr; 
+	ArrayType *minArr, *maxArr, *lenArr;
 	FuncCallContext  *funcctx;
 	MyInfo *info;
+
 	if (SRF_IS_FIRSTCALL())
 	{
 		Datum *values = 0;
@@ -195,8 +297,10 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 		int dimmults[NMAXDIM];
 		MyParam params[NMAXDIM];
 		int (*funcs[NMAXDIM]) (Datum, MyParam *);
+		double (*funcW) (Datum) = NULL;
 		char *command;
 		text *sql;
+		int ncolumns;
 		MemoryContext oldcontext; 
 		
 		funcctx = SRF_FIRSTCALL_INIT();
@@ -214,7 +318,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 		lenArr = PG_GETARG_ARRAYTYPE_P(1);
 		minArr = PG_GETARG_ARRAYTYPE_P(2);
 		maxArr = PG_GETARG_ARRAYTYPE_P(3);
-
+		
 		if (	(ARR_NDIM(minArr) != 1) || 
 			(ARR_NDIM(maxArr) != 1) || 
 			(ARR_NDIM(lenArr) != 1))
@@ -226,7 +330,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 			array_contains_nulls(maxArr) || 
 			array_contains_nulls(lenArr))
 		{
-			elog(ERROR, "The array of mins mustn't contain nulls" );	
+			elog(ERROR, "The arrays must not contain nulls" );	
 		}
 
 		elmtype = INT8OID;
@@ -281,6 +385,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 	
 		ndim = nelemsMin;
 		info->ndim = ndim;
+
 		for(int i=0; i<ndim; i++)
 		{
 			nelem *= dims[i];
@@ -292,9 +397,25 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 			elog(ERROR,"Array is to large");
 		}
 
-		retarr = palloc(nelem * sizeof(int64_t));
-		memset(retarr, 0, sizeof(int64_t)*nelem);
+		if (weight_flag)
+		{
+			retarr = palloc(nelem * sizeof(float8));
+			memset(retarr, 0, sizeof(float8) * nelem);
+			retarr_d = (float8 *)retarr;		
+			ncolumns = ndim + 1;
+
+		}
+		else
+		{
+			retarr = palloc(nelem * sizeof(int64_t));
+			memset(retarr, 0, sizeof(int64_t)*nelem);
+			retarr_i = (int64_t *)retarr;			
+			ncolumns = ndim;
+		}
 		info->retarr = retarr;
+
+		values = palloc(sizeof(Datum) * ncolumns);
+		isnull = palloc(sizeof(bool) * ncolumns);
 
 		SPI_connect();
 
@@ -323,24 +444,41 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 
 				if (callid == 0) 
 				{
-					if (tupdesc->natts != ndim)
+					if (weight_flag)
 					{
-						elog(ERROR, "Mismatch in number of columns");
+						if (tupdesc->natts != ncolumns)
+						{
+							elog(ERROR, "Number of columns must match the length of the arrays + plus an extrac column for the weights");
+						}
 					}
-					values = palloc(sizeof(Datum) * ndim);
-					isnull = palloc(sizeof(bool) * ndim);
+					else
+					{
+						if (tupdesc->natts != ncolumns)
+						{
+							elog(ERROR, "Number of columns must match the length of the arrays");
+						}
+					}
 				}
 				
 				for (int j = 0; j < proc; j++)
 				{
+					double cur_weight;
 					HeapTuple tuple = tuptable->vals[j];
 					heap_deform_tuple(tuple, tupdesc, values, isnull);
-					pos = func(values, isnull, tupdesc, mins, maxs, dims,
-							callid, dimmults, params, funcs);
+					pos = func(values, isnull, tupdesc, ndim, mins, maxs, dims,
+						callid, dimmults, params, funcs, &funcW, weight_flag,
+						&cur_weight);
 					callid++;
 					if (pos >= 0)	
 					{
-						retarr[pos] += 1;
+						if (weight_flag)
+						{
+							retarr_d[pos] += cur_weight;
+						}
+						else
+						{
+							retarr_i[pos] += 1;
+						}
 					}
 				}
 			}
@@ -364,19 +502,37 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 	funcctx = SRF_PERCALL_SETUP();
 	info = (MyInfo*)(funcctx->user_fctx);
 	retarr = info->retarr;
+	if (weight_flag)
+	{
+		retarr_d = (float8 *)retarr;			
+	}
+	{
+		retarr_i = (int64_t *)retarr;		
+	}
 	dims = info->dims;
 	nelem = info->nelem;
 	ndim = info->ndim;
 	lastpos = info->lastpos + 1;
 	returning = 0;
-	
+		
 	for(;lastpos < nelem; lastpos++)
 	{
-		if (retarr[lastpos] != 0)
+		if (weight_flag)
 		{
-			returning = 1 ;
-			break;
-		}	
+			if (retarr_d[lastpos] != 0)
+			{
+				returning = 1 ;
+				break;
+			}	
+		}
+		else
+		{
+			if (retarr_i[lastpos] != 0)
+			{
+				returning = 1 ;
+				break;
+			}	
+		}
 	}
 
 	info->lastpos = lastpos;
@@ -394,11 +550,18 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 		int pntr = lastpos; 
 		for(int i=0;i<ndim;i++)
 		{
-			valuesOut[i] = pntr % dims[i];
+			valuesOut[i] = pntr % dims[i]; // i just copy by value
 			pntr/=dims[i];
 			isnullOut[i] = false;
 		}
-		valuesOut[ndim] = retarr[lastpos];
+		if (weight_flag)
+		{
+			valuesOut[ndim] = retarr_d[lastpos]; // copy by value again
+		}
+		else
+		{
+			valuesOut[ndim] = retarr_i[lastpos];
+		}
 		isnullOut[ndim] = false;
 
 		tuple = heap_form_tuple(funcctx->tuple_desc,
@@ -409,26 +572,51 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 		SRF_RETURN_NEXT(funcctx, result);
 	}
 }
+
 PG_FUNCTION_INFO_V1(pg_hist);
 Datum pg_hist(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo,0);
+	return pg_hist_0(fcinfo,0,0);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_1d);
 Datum pg_hist_1d(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo,1);
+	return pg_hist_0(fcinfo,1,0);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_2d);
 Datum pg_hist_2d(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo,2);
+	return pg_hist_0(fcinfo,2,0);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_3d);
 Datum pg_hist_3d(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo,3);
+	return pg_hist_0(fcinfo,3,0);
+}
+
+PG_FUNCTION_INFO_V1(pg_hist_w);
+Datum pg_hist_w(PG_FUNCTION_ARGS)
+{
+	return pg_hist_0(fcinfo,0,1);
+}
+
+PG_FUNCTION_INFO_V1(pg_hist_1d_w);
+Datum pg_hist_1d_w(PG_FUNCTION_ARGS)
+{
+	return pg_hist_0(fcinfo,1,1);
+}
+
+PG_FUNCTION_INFO_V1(pg_hist_2d_w);
+Datum pg_hist_2d_w(PG_FUNCTION_ARGS)
+{
+	return pg_hist_0(fcinfo,2,1);
+}
+
+PG_FUNCTION_INFO_V1(pg_hist_3d_w);
+Datum pg_hist_3d_w(PG_FUNCTION_ARGS)
+{
+	return pg_hist_0(fcinfo,3,1);
 }
