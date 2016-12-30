@@ -24,6 +24,18 @@ typedef struct {
 	double mult;
 } MyParam;
 
+typedef struct 
+{
+	void *retarr;
+	int *dims;	
+	int nelem;
+	int ndim;
+	int lastpos; 
+} MyInfo;
+
+
+
+/* utilities that take Datum asa input and return bin location */
 static int int16bin(Datum val, MyParam *par)
 {
 	int ret = (int)floor((DatumGetInt16(val) - par->mi) * par->mult);
@@ -81,8 +93,7 @@ static int numericbin(Datum val, MyParam *par)
 	return iret;
 }
 
-
-
+/* utilities that take Datum as input and convert it to double */
 
 static double int16w(Datum val)
 {
@@ -119,7 +130,10 @@ static double numericw(Datum val)
 	return vald;
 }
 
-static int64_t func(Datum *values, bool *isnull, TupleDesc td,
+/* Main function that processes rows of Datums computes bin locations
+ * and weight values 
+ */
+static int64_t processer(Datum *values, bool *isnull, TupleDesc td,
 			int ndim, 
 			double *mins, double *maxs,
 			int *dims, int callid,  int *dimmults,
@@ -178,7 +192,7 @@ static int64_t func(Datum *values, bool *isnull, TupleDesc td,
 
 			if (funcs[i-1] == NULL)
 			{
-				elog(ERROR, "Wrong type");
+				elog(ERROR, "Unrecognised input datatype");
 			}
 		
 			params[i-1].mi = mins[i-1];
@@ -217,7 +231,7 @@ static int64_t func(Datum *values, bool *isnull, TupleDesc td,
 
 			if (*funcW == NULL)
 			{
-				elog(ERROR, "Wrong type");
+				elog(ERROR, "Unrecognised type of the weight column");
 			}
 		}
 	}
@@ -250,18 +264,6 @@ static int64_t func(Datum *values, bool *isnull, TupleDesc td,
 	return pos0;
 }
 
-
-typedef struct 
-{
-	void *retarr;
-	int *dims;	
-	int nelem;
-	int ndim;
-	int lastpos; 
-} MyInfo;
-
-
-//PG_FUNCTION_INFO_V1(pg_hist_0);
 
 Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag);
 
@@ -408,12 +410,13 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		else
 		{
 			retarr = palloc(nelem * sizeof(int64_t));
-			memset(retarr, 0, sizeof(int64_t)*nelem);
+			memset(retarr, 0, sizeof(int64_t) * nelem);
 			retarr_i = (int64_t *)retarr;			
 			ncolumns = ndim;
 		}
+		
 		info->retarr = retarr;
-
+		
 		values = palloc(sizeof(Datum) * ncolumns);
 		isnull = palloc(sizeof(bool) * ncolumns);
 
@@ -444,16 +447,14 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 
 				if (callid == 0) 
 				{
-					if (weight_flag)
+					if (tupdesc->natts != ncolumns)
 					{
-						if (tupdesc->natts != ncolumns)
+						if (weight_flag)
 						{
+
 							elog(ERROR, "Number of columns must match the length of the arrays + plus an extrac column for the weights");
 						}
-					}
-					else
-					{
-						if (tupdesc->natts != ncolumns)
+						else
 						{
 							elog(ERROR, "Number of columns must match the length of the arrays");
 						}
@@ -465,7 +466,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 					double cur_weight;
 					HeapTuple tuple = tuptable->vals[j];
 					heap_deform_tuple(tuple, tupdesc, values, isnull);
-					pos = func(values, isnull, tupdesc, ndim, mins, maxs, dims,
+					pos = processer(values, isnull, tupdesc, ndim, mins, maxs, dims,
 						callid, dimmults, params, funcs, &funcW, weight_flag,
 						&cur_weight);
 					callid++;
@@ -550,13 +551,13 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		int pntr = lastpos; 
 		for(int i=0;i<ndim;i++)
 		{
-			valuesOut[i] = pntr % dims[i]; // i just copy by value
+			valuesOut[i] = Int32GetDatum(pntr % dims[i]); // i just copy by value
 			pntr/=dims[i];
 			isnullOut[i] = false;
 		}
 		if (weight_flag)
 		{
-			valuesOut[ndim] = retarr_d[lastpos]; // copy by value again
+			valuesOut[ndim] = Float8GetDatum(retarr_d[lastpos]); // copy by value again
 		}
 		else
 		{
