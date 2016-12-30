@@ -157,6 +157,7 @@ typedef struct
 	int64_t *retarr;
 	int *dims;	
 	int nelem;
+	int ndim;
 	int lastpos; 
 } MyInfo;
 
@@ -270,7 +271,7 @@ Datum pg_hist(PG_FUNCTION_ARGS)
 			elog(ERROR, "The length of all arrays must be the same");
 		}
 		ndim = nelemsMin;
-		
+		info->ndim = ndim;
 		for(int i=0; i<ndim; i++)
 		{
 			nelem *= dims[i];
@@ -356,6 +357,7 @@ Datum pg_hist(PG_FUNCTION_ARGS)
 	retarr = info->retarr;
 	dims = info->dims;
 	nelem = info->nelem;
+	ndim = info->ndim;
 	int lastpos = info->lastpos + 1;
 	int returning = 0;
 	
@@ -379,14 +381,16 @@ Datum pg_hist(PG_FUNCTION_ARGS)
 		Datum result; 
 		HeapTuple tuple; 
 		bool isnullOut[NMAXDIM];
-		//funcctx->tuple_desc;
 		Datum valuesOut[NMAXDIM];
-		
-		valuesOut[0] = lastpos;
-		valuesOut[1] = retarr[lastpos];
-
-		isnullOut[0] = false;
-		isnullOut[1] = false;
+		int pntr = lastpos; 
+		for(int i=0;i<ndim;i++)
+		{
+			valuesOut[i] = pntr % dims[i];
+			pntr/=dims[i];
+			isnullOut[i] = false;
+		}
+		valuesOut[ndim] = retarr[lastpos];
+		isnullOut[ndim] = false;
 
 		tuple = heap_form_tuple(funcctx->tuple_desc,
 				valuesOut,
@@ -395,5 +399,4 @@ Datum pg_hist(PG_FUNCTION_ARGS)
 		result = HeapTupleGetDatum(tuple);
 		SRF_RETURN_NEXT(funcctx, result);
 	}
-	//return (proc);
 }
