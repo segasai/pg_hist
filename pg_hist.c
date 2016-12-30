@@ -422,7 +422,8 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 
 		SPI_connect();
 
-		curs  = SPI_prepare_cursor(command, 0 , NULL, 0);
+		curs  = SPI_prepare_cursor(command, 0 , NULL, 
+				CURSOR_OPT_NO_SCROLL);
 		
 		if (curs == NULL)
 		{
