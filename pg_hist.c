@@ -26,19 +26,19 @@ typedef struct {
 
 static int int16bin(Datum val, MyParam *par)
 {
-	int ret = (int)((DatumGetInt16(val) - par->mi) * par->mult);
+	int ret = (int)floor((DatumGetInt16(val) - par->mi) * par->mult);
 	return ret;
 }
 
 static int int32bin(Datum val, MyParam *par)
 {
-	int ret = (int)((DatumGetInt32(val) - par->mi) * par->mult);
+	int ret = (int)floor((DatumGetInt32(val) - par->mi) * par->mult);
 	return ret;
 }
 
 static int int64bin(Datum val, MyParam *par)
 {
-	int ret = (int)((DatumGetInt64(val) - par->mi) * par->mult);
+	int ret = (int)floor((DatumGetInt64(val) - par->mi) * par->mult);
 	return ret;
 }
 
@@ -48,7 +48,7 @@ static int float32bin(Datum val, MyParam *par)
 	int iret = -1;
 	if (isfinite(ret))
 	{
-		iret = (int) ret;
+		iret = (int) floor(ret);
 	}
 	return iret;
 }
@@ -59,7 +59,7 @@ static int float64bin(Datum val, MyParam *par)
 	int iret = -1;
 	if (isfinite(ret))
 	{
-		iret = (int) ret;
+		iret = (int) floor(ret);
 	}
 	return iret;
 }
@@ -76,7 +76,7 @@ static int numericbin(Datum val, MyParam *par)
 		tmp = DatumGetCString(DirectFunctionCall1(numeric_out, val));
 		vald  = strtod(tmp, NULL);
 		pfree(tmp);
-		iret = (int)((vald - par->mi) * par->mult);
+		iret = (int)floor((vald - par->mi) * par->mult);
 	}
 	return iret;
 }
@@ -91,7 +91,7 @@ static int64_t func(Datum *values, bool *isnull, TupleDesc td,
 	
 	int ncols = td->natts;
 	int i;
-	int pos0 = -1;
+	int pos0 = 0;
 
 	if (callid == 0)
 	{
@@ -147,7 +147,6 @@ static int64_t func(Datum *values, bool *isnull, TupleDesc td,
 			break;
 		}
 	}
-	
 	return pos0;
 }
 
@@ -162,11 +161,11 @@ typedef struct
 } MyInfo;
 
 
-PG_FUNCTION_INFO_V1(pg_hist);
-//int pg_hist(text *sql, int cnt)
-Datum pg_hist(PG_FUNCTION_ARGS)
+//PG_FUNCTION_INFO_V1(pg_hist_0);
+
+Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim)
 {
-	int proc, ndim, callid = 0;
+	int proc, callid = 0;
 	double mins[NMAXDIM];
 	double maxs[NMAXDIM];
 	int *dims;
@@ -270,6 +269,11 @@ Datum pg_hist(PG_FUNCTION_ARGS)
 		{
 			elog(ERROR, "The length of all arrays must be the same");
 		}
+		if ((ndim!=0)&&(ndim!=nelemsMin))
+		{
+			elog(ERROR, "The dimensionality mismatch");	
+		}
+	
 		ndim = nelemsMin;
 		info->ndim = ndim;
 		for(int i=0; i<ndim; i++)
@@ -399,4 +403,27 @@ Datum pg_hist(PG_FUNCTION_ARGS)
 		result = HeapTupleGetDatum(tuple);
 		SRF_RETURN_NEXT(funcctx, result);
 	}
+}
+PG_FUNCTION_INFO_V1(pg_hist);
+Datum pg_hist(PG_FUNCTION_ARGS)
+{
+	return pg_hist_0(fcinfo,0);
+}
+
+PG_FUNCTION_INFO_V1(pg_hist_1d);
+Datum pg_hist_1d(PG_FUNCTION_ARGS)
+{
+	return pg_hist_0(fcinfo,1);
+}
+
+PG_FUNCTION_INFO_V1(pg_hist_2d);
+Datum pg_hist_2d(PG_FUNCTION_ARGS)
+{
+	return pg_hist_0(fcinfo,2);
+}
+
+PG_FUNCTION_INFO_V1(pg_hist_3d);
+Datum pg_hist_3d(PG_FUNCTION_ARGS)
+{
+	return pg_hist_0(fcinfo,3);
 }
