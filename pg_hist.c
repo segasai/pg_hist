@@ -280,7 +280,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 	bool elmbyval, *nullsp=NULL;
 	int pos, nelemsLen, nelemsMin, nelemsMax;
 	int lastpos, returning;
-
+	int i;
 	int nelem = 1;
 	void* retarr;
 	int64_t *retarr_i=0;
@@ -343,7 +343,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		{
 			elog(ERROR, "Too many elements");
 		}
-		for (int i = 0; i < nelemsLen; i++)
+		for (i = 0; i < nelemsLen; i++)
 		{
 			dims[i] = DatumGetInt64(elemsp[i]);
 			if (dims[i] <= 0)
@@ -360,7 +360,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 			elog(ERROR, "Too many elements");
 		}
 
-		for (int i=0; i<nelemsMin; i++)
+		for (i=0; i<nelemsMin; i++)
 		{
 			mins[i] = DatumGetFloat8(elemsp[i]);
 		}
@@ -371,7 +371,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		{
 			elog(ERROR, "Too many elements");
 		}
-		for (int i=0; i<nelemsMax; i++)
+		for (i=0; i<nelemsMax; i++)
 		{
 			maxs[i] = DatumGetFloat8(elemsp[i]);
 		}
@@ -388,7 +388,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		ndim = nelemsMin;
 		info->ndim = ndim;
 
-		for(int i=0; i<ndim; i++)
+		for(i=0; i<ndim; i++)
 		{
 			nelem *= dims[i];
 		}
@@ -444,7 +444,8 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 			{
 				TupleDesc tupdesc = SPI_tuptable->tupdesc;
 				SPITupleTable *tuptable = SPI_tuptable;
-
+				int j;
+				
 				if (callid == 0) 
 				{
 					if (tupdesc->natts != ncolumns)
@@ -461,7 +462,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 					}
 				}
 				
-				for (int j = 0; j < proc; j++)
+				for (j = 0; j < proc; j++)
 				{
 					double cur_weight;
 					HeapTuple tuple = tuptable->vals[j];
@@ -549,7 +550,8 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		bool isnullOut[NMAXDIM];
 		Datum valuesOut[NMAXDIM];
 		int pntr = lastpos; 
-		for(int i=0;i<ndim;i++)
+		int i;
+		for(i=0; i<ndim; i++)
 		{
 			valuesOut[i] = Int32GetDatum(pntr % dims[i]); // i just copy by value
 			pntr/=dims[i];
