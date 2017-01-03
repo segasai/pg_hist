@@ -20,6 +20,7 @@ test:
 	psql -c '\i sql/test2.sql' $(TESTDB) > results/test2.out
 	psql -c '\i sql/test3.sql' $(TESTDB) > results/test3.out
 	psql -c '\i sql/test4.sql' $(TESTDB) > results/test4.out
+	psql -c '\i sql/test5.sql' $(TESTDB) > results/test5.out 2>&1
 	diff results/test1.out expected/test1.expected
 	diff results/test2.out expected/test2.expected
 	diff results/test3.out expected/test3.expected

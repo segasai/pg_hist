@@ -1,0 +1,4 @@
+psql:sql/test5.sql:1: ERROR:  The length of all arrays must be the same
+psql:sql/test5.sql:2: ERROR:  All the histogram dimensions must be > 0
+psql:sql/test5.sql:3: ERROR:  The length of all arrays must be the same
+psql:sql/test5.sql:4: ERROR:  The dimensionality mismatch
