@@ -30,3 +30,8 @@ select * from pg_hist_3d('select 1.,1.,1. from generate_series(1,100000);',ARRAY
 
 select * from pg_hist('select 1.,1.,1.,1.,1. from generate_series(1,100000);',ARRAY[11,11,11,11,11], ARRAY[0,0,0,0,0],ARRAY[2,2,2,2,2]) 
     as (x1 int, x2 int, x3 int, x4 int, x5 int, hist int);
+
+select * from pg_hist('select a,b,c,d,e,a,b,c,d,e from test1',ARRAY[2,2,2,2,2, 2,2,2,2,2], 
+    ARRAY[0,0,0,0,0, 0,0,0,0,0],ARRAY[20,20,20,20,20, 20,20,20,20,20]) 
+    as (a int, b int, c int, d int, e int, a1 int, b1 int, c1 int, d1 int, e1 int,
+            hist bigint);
