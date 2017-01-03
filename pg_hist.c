@@ -14,8 +14,17 @@
 PG_MODULE_MAGIC;
 #endif
 
+// Parameters
+
+// Maximum number of dimensions in the histogram
 #define NMAXDIM 10
+
+// Cursor batch size
 #define BATCH_SIZE 1000 
+
+// maximum number of elements in the histogram
+#define MAXSIZE (100*1000*1000)
+
 
 typedef struct {
 	double mi;
@@ -32,7 +41,6 @@ typedef struct
 	int ndim;
 	int lastpos; 
 } MyInfo;
-
 
 
 /* utilities that take Datum asa input and return bin location */
@@ -92,6 +100,7 @@ static int numericbin(Datum val, MyParam *par)
 	}
 	return iret;
 }
+
 
 /* utilities that take Datum as input and convert it to double */
 
@@ -153,6 +162,9 @@ static int64_t processer(Datum *values, bool *isnull, TupleDesc td,
 
 		for (i=1; i<=ndim; i++)
 		{
+			/* It is important that PG's indexing is starting
+			 * from 1, while I use normal C indexing from 0
+			 */
 			char *typ;
 			if (i == 1)
 			{
@@ -199,6 +211,7 @@ static int64_t processer(Datum *values, bool *isnull, TupleDesc td,
 			params[i-1].ma = maxs[i-1];
 			params[i-1].mult = dims[i-1] * 1. / (maxs[i-1] - mins[i-1]);
 		}
+		
 		if (weight_flag)
 		{
 			char *typ = SPI_gettype(td, ndim+1); // type of column
@@ -269,25 +282,21 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag);
 
 Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 {
-	int proc, callid = 0;
+	int callid = 0;
 	double mins[NMAXDIM];
 	double maxs[NMAXDIM];
 	int *dims;
 
 	SPIPlanPtr curs;
 	Portal port;
-	Datum *elemsp=NULL;
 	bool elmbyval, *nullsp=NULL;
-	int pos, nelemsLen, nelemsMin, nelemsMax;
+	int nelemsLen, nelemsMin, nelemsMax;
 	int lastpos, returning;
 	int i;
 	int nelem = 1;
 	void* retarr;
 	int64_t *retarr_i=0;
 	float8 *retarr_d=0;
-	Oid elmtype;
-	int16_t elmlen;
-	char elmalign = 0;
 	ArrayType *minArr, *maxArr, *lenArr;
 	FuncCallContext  *funcctx;
 	MyInfo *info;
@@ -304,6 +313,10 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		text *sql;
 		int ncolumns;
 		MemoryContext oldcontext; 
+		Oid elmtype;
+		int16_t elmlen;
+		char elmalign = 0;
+		Datum *elemsp=NULL;
 		
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
@@ -335,30 +348,30 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 			elog(ERROR, "The arrays must not contain nulls" );	
 		}
 
+		if (	(ARR_SIZE(minArr) >NMAXDIM) || 
+			(ARR_SIZE(maxArr) >NMAXDIM) || 
+			(ARR_SIZE(lenArr) >NMAXDIM))
+		{
+			elog(ERROR, "Too many elements in the arrays");		
+		}
+
 		elmtype = INT8OID;
 		get_typlenbyvalalign(elmtype, &elmlen, &elmbyval, &elmalign);
 		deconstruct_array(lenArr, elmtype, elmlen, elmbyval, elmalign,
 					  &elemsp, &nullsp, &nelemsLen);
-		if (nelemsLen > NMAXDIM)
-		{
-			elog(ERROR, "Too many elements");
-		}
 		for (i = 0; i < nelemsLen; i++)
 		{
 			dims[i] = DatumGetInt64(elemsp[i]);
 			if (dims[i] <= 0)
 			{
-				elog(ERROR,"The dimensions must be > 0");
+				elog(ERROR,"All the histogram dimensions must be > 0");
 			}
 		}
+
 		elmtype = FLOAT8OID;
 		get_typlenbyvalalign(elmtype, &elmlen, &elmbyval, &elmalign);
 		deconstruct_array(minArr, elmtype, elmlen, elmbyval, elmalign,
 					  &elemsp, &nullsp, &nelemsMin);
-		if (nelemsMin > NMAXDIM)
-		{
-			elog(ERROR, "Too many elements");
-		}
 
 		for (i=0; i<nelemsMin; i++)
 		{
@@ -367,10 +380,6 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 
 		deconstruct_array(maxArr, elmtype, elmlen, elmbyval, elmalign,
 					  &elemsp, &nullsp, &nelemsMax);
-		if (nelemsMax > NMAXDIM)
-		{
-			elog(ERROR, "Too many elements");
-		}
 		for (i=0; i<nelemsMax; i++)
 		{
 			maxs[i] = DatumGetFloat8(elemsp[i]);
@@ -380,7 +389,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		{
 			elog(ERROR, "The length of all arrays must be the same");
 		}
-		if ((ndim!=0)&&(ndim!=nelemsMin))
+		if ((ndim != 0) && (ndim != nelemsMin))
 		{
 			elog(ERROR, "The dimensionality mismatch");	
 		}
@@ -400,11 +409,12 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 			nelem *= dims[i];
 		}
 
-		info->nelem = nelem; 
-		if (nelem > (10*1000*1000))
+		if (nelem > MAXSIZE)
 		{
 			elog(ERROR,"Array is to large");
 		}
+
+		info->nelem = nelem; 
 
 		if (weight_flag)
 		{
@@ -412,7 +422,6 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 			memset(retarr, 0, sizeof(float8) * nelem);
 			retarr_d = (float8 *)retarr;		
 			ncolumns = ndim + 1;
-
 		}
 		else
 		{
@@ -443,10 +452,11 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 
 		while (1)
 		{
+			int nrows; 
 			SPI_scroll_cursor_fetch(port, FETCH_FORWARD,
 				     BATCH_SIZE);
-			proc = SPI_processed;
-			if (proc == 0) { break;} 
+			nrows = SPI_processed;
+			if (nrows == 0) { break;} 
 
 			if ( SPI_tuptable != NULL)
 			{
@@ -454,6 +464,9 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 				SPITupleTable *tuptable = SPI_tuptable;
 				int j;
 				
+				/* In ther first iteration I check whether 
+				 * the number of columns is correct
+				 */
 				if (callid == 0) 
 				{
 					if (tupdesc->natts != ncolumns)
@@ -461,7 +474,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 						if (weight_flag)
 						{
 
-							elog(ERROR, "Number of columns must match the length of the arrays + plus an extrac column for the weights");
+							elog(ERROR, "Number of columns must match the length of the arrays + plus an extra column for the weights");
 						}
 						else
 						{
@@ -470,32 +483,35 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 					}
 				}
 				
-				for (j = 0; j < proc; j++)
+				for (j = 0; j < nrows; j++)
 				{
 					double cur_weight;
+					int histpos;
 					HeapTuple tuple = tuptable->vals[j];
 					heap_deform_tuple(tuple, tupdesc, values, isnull);
-					pos = processer(values, isnull, tupdesc, ndim, mins, maxs, dims,
+					histpos = processer(values, isnull, tupdesc, ndim, mins, maxs, dims,
 						callid, dimmults, params, funcs, &funcW, weight_flag,
 						&cur_weight);
 					callid++;
-					if (pos >= 0)	
+					if (histpos >= 0)	
 					{
 						if (weight_flag)
 						{
-							retarr_d[pos] += cur_weight;
+							retarr_d[histpos] += cur_weight;
 						}
 						else
 						{
-							retarr_i[pos] += 1;
+							retarr_i[histpos] += 1;
 						}
 					}
 				}
 				SPI_freetuptable(SPI_tuptable);
 			}
 		}
+		
 		SPI_cursor_close(port);
 		SPI_finish();
+		
 		pfree(command);
 		pfree(values);
 		pfree(isnull);
