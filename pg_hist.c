@@ -348,7 +348,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 			dims[i] = DatumGetInt64(elemsp[i]);
 			if (dims[i] <= 0)
 			{
-				elog(ERROR,"The dimension must be > 0");
+				elog(ERROR,"The dimensions must be > 0");
 			}
 		}
 		elmtype = FLOAT8OID;
@@ -384,7 +384,14 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		{
 			elog(ERROR, "The dimensionality mismatch");	
 		}
-	
+		for (i=0; i<nelemsMax;i++)
+		{
+			if (maxs[i]<=mins[i])
+			{
+				elog(ERROR, "The values of upper bin edges should be strictly larger than lower bin edges");
+			}
+		}
+
 		ndim = nelemsMin;
 		info->ndim = ndim;
 
