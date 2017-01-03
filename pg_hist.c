@@ -23,7 +23,7 @@ PG_MODULE_MAGIC;
 #define BATCH_SIZE 1000 
 
 // maximum number of elements in the histogram
-#define MAXSIZE (100*1000*1000)
+#define MAXSIZE (100L*1000*1000)
 
 
 typedef struct {
@@ -201,7 +201,7 @@ static int64_t processer(Datum *values, bool *isnull, TupleDesc td,
 				funcs[i-1] = numericbin;
 			}
 			pfree(typ);
-
+			
 			if (funcs[i-1] == NULL)
 			{
 				elog(ERROR, "Unrecognised input datatype");
@@ -214,7 +214,7 @@ static int64_t processer(Datum *values, bool *isnull, TupleDesc td,
 		
 		if (weight_flag)
 		{
-			char *typ = SPI_gettype(td, ndim+1); // type of column
+			char *typ = SPI_gettype(td, ndim + 1); // type of column
 			*funcW = NULL;
 			if (strcmp(typ, "int2") == 0)
 			{
@@ -251,6 +251,7 @@ static int64_t processer(Datum *values, bool *isnull, TupleDesc td,
 	
 	for (i=0; i<ndim; i++)
 	{
+		/* if any of the columns is null we skip the row */
 		if (!isnull[i])
 		{
 			int posx = funcs[i](values[i], params + i);
@@ -272,6 +273,7 @@ static int64_t processer(Datum *values, bool *isnull, TupleDesc td,
 	}
 	if (weight_flag)
 	{
+		/* weight is the last column */
 		*weight = (*funcW)(values[ndim]);
 	}
 	return pos0;
@@ -284,7 +286,6 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 {
 	int *dims;
 	int lastpos;
-	int i;
 	int nelem = 1;
 	void* histarr;
 	int64_t *histarr_i=0, retval_i=0;
@@ -314,6 +315,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		SPIPlanPtr curs;
 		Portal port;
 		int nelemsLen, nelemsMin, nelemsMax;
+		int i;
 		double mins[NMAXDIM];
 		double maxs[NMAXDIM];
 		int callid = 0;
@@ -323,7 +325,6 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		
 		dims = (int *)palloc(NMAXDIM * sizeof(int));
 		sql = PG_GETARG_TEXT_P(0);
-		/* Convert given text object to a C string */
 		command = text_to_cstring(sql);
 
 		lenArr = PG_GETARG_ARRAYTYPE_P(1);
@@ -344,9 +345,9 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 			elog(ERROR, "The arrays must not contain nulls" );	
 		}
 
-		if (	(ARR_DIMS(minArr)[0] >NMAXDIM) || 
-			(ARR_DIMS(maxArr)[0] >NMAXDIM) || 
-			(ARR_DIMS(lenArr)[0] >NMAXDIM))
+		if (	(ARR_DIMS(minArr)[0] > NMAXDIM) || 
+			(ARR_DIMS(maxArr)[0] > NMAXDIM) || 
+			(ARR_DIMS(lenArr)[0] > NMAXDIM))
 		{
 			elog(ERROR, "Too many elements in the arrays");		
 		}
@@ -389,7 +390,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		{
 			elog(ERROR, "The dimensionality mismatch");	
 		}
-		for (i=0; i<nelemsMax;i++)
+		for (i=0; i<nelemsMax; i++)
 		{
 			if (maxs[i] <= mins[i])
 			{
@@ -406,7 +407,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 
 		if (nelem > MAXSIZE)
 		{
-			elog(ERROR,"Array is to large");
+			elog(ERROR,"Array is too large");
 		}
 
 
@@ -421,11 +422,11 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		{
 			histarr = palloc(nelem * sizeof(int64_t));
 			memset(histarr, 0, sizeof(int64_t) * nelem);
-			histarr_i = (int64_t *)histarr;			
+			histarr_i = (int64_t *) histarr;			
 			ncolumns = ndim;
 		}
 
-		info = (MyInfo *)palloc(sizeof(MyInfo));
+		info = (MyInfo *) palloc(sizeof(MyInfo));
 		info-> dims= dims;
 		info->lastpos = -1; 
 		info->nelem = nelem; 
@@ -461,7 +462,6 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 			{
 				TupleDesc tupdesc = SPI_tuptable->tupdesc;
 				SPITupleTable *tuptable = SPI_tuptable;
-				int j;
 				
 				/* In ther first iteration I check whether 
 				 * the number of columns is correct
@@ -482,11 +482,11 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 					}
 				}
 				
-				for (j = 0; j < nrows; j++)
+				for (i = 0; i < nrows; i++)
 				{
 					double cur_weight;
 					int histpos;
-					HeapTuple tuple = tuptable->vals[j];
+					HeapTuple tuple = tuptable->vals[i];
 					heap_deform_tuple(tuple, tupdesc, values, isnull);
 					histpos = processer(values, isnull, tupdesc, ndim, mins, maxs, dims,
 						callid, dimmults, params, funcs, &funcW, weight_flag,
@@ -526,14 +526,14 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 	}
 
 	funcctx = SRF_PERCALL_SETUP();
-	info = (MyInfo*)(funcctx->user_fctx);
+	info = (MyInfo*) (funcctx->user_fctx);
 	histarr = info->histarr;
 	if (weight_flag)
 	{
-		histarr_d = (float8 *)histarr;			
+		histarr_d = (float8 *) histarr;			
 	}
 	{
-		histarr_i = (int64_t *)histarr;		
+		histarr_i = (int64_t *) histarr;		
 	}
 	dims = info->dims;
 	nelem = info->nelem;
@@ -580,7 +580,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		for(i=0; i<ndim; i++)
 		{
 			valuesOut[i] = Int32GetDatum(pntr % dims[i]); // i just copy by value
-			pntr/=dims[i];
+			pntr /= dims[i];
 			isnullOut[i] = false;
 		}
 		if (weight_flag)
@@ -605,47 +605,47 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 PG_FUNCTION_INFO_V1(pg_hist);
 Datum pg_hist(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo,0,0);
+	return pg_hist_0(fcinfo, 0, 0);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_1d);
 Datum pg_hist_1d(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo,1,0);
+	return pg_hist_0(fcinfo, 1, 0);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_2d);
 Datum pg_hist_2d(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo,2,0);
+	return pg_hist_0(fcinfo, 2, 0);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_3d);
 Datum pg_hist_3d(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo,3,0);
+	return pg_hist_0(fcinfo, 3, 0);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_w);
 Datum pg_hist_w(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo,0,1);
+	return pg_hist_0(fcinfo, 0, 1);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_1d_w);
 Datum pg_hist_1d_w(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo,1,1);
+	return pg_hist_0(fcinfo, 1, 1);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_2d_w);
 Datum pg_hist_2d_w(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo,2,1);
+	return pg_hist_0(fcinfo, 2, 1);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_3d_w);
 Datum pg_hist_3d_w(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo,3,1);
+	return pg_hist_0(fcinfo, 3, 1);
 }
