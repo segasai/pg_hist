@@ -172,7 +172,7 @@ static int64_t processer(Datum *values, bool *isnull, TupleDesc td,
 			MyParam *params, 
 			int (*funcs[NMAXDIM]) (Datum, MyParam *),
 			double (**funcW) (Datum),
-			int weight_flag,
+			bool weight_flag,
 			double *weight
 			)
 {
@@ -303,9 +303,18 @@ static int64_t processer(Datum *values, bool *isnull, TupleDesc td,
 }
 
 
-Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag);
+Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, bool weight_flag);
 
-Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
+/* This is is the main histogram function 
+ * on top of PG arguments which are 
+ * query, nbins_array, left_bin_edge_array, right_bin_edge_array
+ * this function accepts the ndim arguments for the number of dimensions of
+ * the histogram. This ndim could be zero which means to guess the number of 
+ * dimensions from array length. 
+ * The last arguement is weight_flag which is either 1 or 0 to switch
+ * between regimes with weighted histogram and normal histogram
+ */
+Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, bool weight_flag)
 {
 	int *dims;
 	int lastpos;
@@ -335,8 +344,8 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		Datum *elemsp=NULL;
 		ArrayType *minArr, *maxArr, *lenArr;
 		bool elmbyval, *nullsp=NULL;
-		SPIPlanPtr curs;
-		Portal port;
+		SPIPlanPtr prepared_plan;
+		Portal portal;
 		int nelemsLen, nelemsMin, nelemsMax;
 		int i;
 		double mins[NMAXDIM];
@@ -409,10 +418,13 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		{
 			elog(ERROR, "The length of all arrays must be the same");
 		}
+		/* if ndim is zero then we guess ndim */
 		if ((ndim != 0) && (ndim != nelemsMin))
 		{
 			elog(ERROR, "The dimensionality mismatch");	
 		}
+		ndim = nelemsMin;
+
 		for (i=0; i<nelemsMax; i++)
 		{
 			if (maxs[i] <= mins[i])
@@ -421,10 +433,14 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 			}
 		}
 
-		ndim = nelemsMin;
 
 		for(i=0; i<ndim; i++)
 		{
+			if (dims[i]>(INT_MAX/nelem))
+			{
+				/* overflow */
+				elog(ERROR, "Array is too large");				
+			}
 			nelem *= dims[i];
 		}
 
@@ -450,7 +466,7 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		}
 
 		info = (MyInfo *) palloc(sizeof(MyInfo));
-		info-> dims= dims;
+		info->dims = dims;
 		info->lastpos = -1; 
 		info->nelem = nelem; 
 		info->ndim = ndim;		
@@ -461,77 +477,80 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 
 		SPI_connect();
 
-		curs  = SPI_prepare_cursor(command, 0 , NULL, 
+		prepared_plan = SPI_prepare_cursor(command, 0 , NULL, 
 				CURSOR_OPT_NO_SCROLL);
 		
-		if (curs == NULL)
+		if (prepared_plan == NULL)
 		{
 			elog(ERROR,"ERROR executing query");
 		}
 
-		port =  SPI_cursor_open("pg_hist_curs", curs,
-			       NULL, NULL,
-			       true);
+		portal = SPI_cursor_open("pg_hist_curs", prepared_plan,
+			       NULL, NULL, true);
 
-		while (1)
+		while(1)
 		{
 			int nrows; 
-			SPI_scroll_cursor_fetch(port, FETCH_FORWARD,
-				     BATCH_SIZE);
+			TupleDesc tupdesc;
+			SPITupleTable *tuptable;
+			
+			SPI_scroll_cursor_fetch(portal, FETCH_FORWARD, BATCH_SIZE);
 			nrows = SPI_processed;
-			if (nrows == 0) { break;} 
 
-			if ( SPI_tuptable != NULL)
+			if ((nrows == 0) || ( SPI_tuptable == NULL)) 
 			{
-				TupleDesc tupdesc = SPI_tuptable->tupdesc;
-				SPITupleTable *tuptable = SPI_tuptable;
-				
-				/* In ther first iteration I check whether 
-				 * the number of columns is correct
-				 */
-				if (callid == 0) 
-				{
-					if (tupdesc->natts != ncolumns)
-					{
-						if (weight_flag)
-						{
+				break;
+			} 
 
-							elog(ERROR, "Number of columns must match the length of the arrays + plus an extra column for the weights");
-						}
-						else
-						{
-							elog(ERROR, "Number of columns must match the length of the arrays");
-						}
-					}
-				}
-				
-				for (i = 0; i < nrows; i++)
+			tupdesc = SPI_tuptable->tupdesc;
+			tuptable = SPI_tuptable;
+			
+			/* In ther first iteration I check whether 
+			 * the number of columns is correct
+			 */
+			if (callid == 0) 
+			{
+				if (tupdesc->natts != ncolumns)
 				{
-					double cur_weight;
-					int histpos;
-					HeapTuple tuple = tuptable->vals[i];
-					heap_deform_tuple(tuple, tupdesc, values, isnull);
-					histpos = processer(values, isnull, tupdesc, ndim, mins, maxs, dims,
-						callid, dimmults, params, funcs, &funcW, weight_flag,
-						&cur_weight);
-					callid++;
-					if (histpos >= 0)	
+					if (weight_flag)
 					{
-						if (weight_flag)
-						{
-							histarr_d[histpos] += cur_weight;
-						}
-						else
-						{
-							histarr_i[histpos] += 1;
-						}
+
+						elog(ERROR, "Number of columns must match the length of the arrays + plus an extra column for the weights");
+					}
+					else
+					{
+						elog(ERROR, "Number of columns must match the length of the arrays");
 					}
 				}
-				SPI_freetuptable(SPI_tuptable);
 			}
+			
+			for (i = 0; i < nrows; i++)
+			{
+				double cur_weight;
+				int histpos;
+				HeapTuple tuple = tuptable->vals[i];
+				heap_deform_tuple(tuple, tupdesc, values, isnull);
+				histpos = processer(values, isnull, tupdesc, ndim, mins, maxs, dims,
+					callid, dimmults, params, funcs, &funcW, weight_flag,
+					&cur_weight);
+				callid++;
+				if (histpos >= 0)	
+				{
+					if (weight_flag)
+					{
+						histarr_d[histpos] += cur_weight;
+					}
+					else
+					{
+						histarr_i[histpos] += 1;
+					}
+				}
+			}
+			SPI_freetuptable(SPI_tuptable);
 		}
 		
-		SPI_cursor_close(port);
+		SPI_cursor_close(portal);
+		SPI_freeplan(prepared_plan);
 		SPI_finish();
 		
 		pfree(command);
@@ -590,14 +609,16 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 	if (last_row)
 	{
 		pfree(histarr);
+		pfree(dims);
+		pfree(info);
 		SRF_RETURN_DONE(funcctx);
 	}
 	else
 	{
 		Datum result; 
 		HeapTuple tuple; 
-		bool isnullOut[NMAXDIM];
-		Datum valuesOut[NMAXDIM];
+		bool isnullOut[NMAXDIM + 1];
+		Datum valuesOut[NMAXDIM + 1];
 		int pntr = lastpos; 
 		int i;
 		for(i=0; i<ndim; i++)
@@ -625,50 +646,52 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 	}
 }
 
+/* These are the wrappers around pg_hist_0 */
+
 PG_FUNCTION_INFO_V1(pg_hist);
 Datum pg_hist(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo, 0, 0);
+	return pg_hist_0(fcinfo, 0, false);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_1d);
 Datum pg_hist_1d(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo, 1, 0);
+	return pg_hist_0(fcinfo, 1, false);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_2d);
 Datum pg_hist_2d(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo, 2, 0);
+	return pg_hist_0(fcinfo, 2, false);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_3d);
 Datum pg_hist_3d(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo, 3, 0);
+	return pg_hist_0(fcinfo, 3, false);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_w);
 Datum pg_hist_w(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo, 0, 1);
+	return pg_hist_0(fcinfo, 0, true);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_1d_w);
 Datum pg_hist_1d_w(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo, 1, 1);
+	return pg_hist_0(fcinfo, 1, true);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_2d_w);
 Datum pg_hist_2d_w(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo, 2, 1);
+	return pg_hist_0(fcinfo, 2, true);
 }
 
 PG_FUNCTION_INFO_V1(pg_hist_3d_w);
 Datum pg_hist_3d_w(PG_FUNCTION_ARGS)
 {
-	return pg_hist_0(fcinfo, 3, 1);
+	return pg_hist_0(fcinfo, 3, true);
 }
