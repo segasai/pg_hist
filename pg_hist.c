@@ -35,7 +35,7 @@ typedef struct {
 
 typedef struct 
 {
-	void *retarr;
+	void *histarr;
 	int *dims;	
 	int nelem;
 	int ndim;
@@ -282,22 +282,14 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag);
 
 Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 {
-	int callid = 0;
-	double mins[NMAXDIM];
-	double maxs[NMAXDIM];
 	int *dims;
-
-	SPIPlanPtr curs;
-	Portal port;
-	bool elmbyval, *nullsp=NULL;
-	int nelemsLen, nelemsMin, nelemsMax;
-	int lastpos, returning;
+	int lastpos;
 	int i;
 	int nelem = 1;
-	void* retarr;
-	int64_t *retarr_i=0;
-	float8 *retarr_d=0;
-	ArrayType *minArr, *maxArr, *lenArr;
+	void* histarr;
+	int64_t *histarr_i=0, retval_i=0;
+	float8 *histarr_d=0, retval_d=0;
+	bool last_row;
 	FuncCallContext  *funcctx;
 	MyInfo *info;
 
@@ -317,15 +309,19 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		int16_t elmlen;
 		char elmalign = 0;
 		Datum *elemsp=NULL;
+		ArrayType *minArr, *maxArr, *lenArr;
+		bool elmbyval, *nullsp=NULL;
+		SPIPlanPtr curs;
+		Portal port;
+		int nelemsLen, nelemsMin, nelemsMax;
+		double mins[NMAXDIM];
+		double maxs[NMAXDIM];
+		int callid = 0;
 		
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 		
 		dims = (int *)palloc(NMAXDIM * sizeof(int));
-		info = (MyInfo *)palloc(sizeof(MyInfo));
-
-		info-> dims= dims;
-		info->lastpos = -1; 
 		sql = PG_GETARG_TEXT_P(0);
 		/* Convert given text object to a C string */
 		command = text_to_cstring(sql);
@@ -348,9 +344,9 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 			elog(ERROR, "The arrays must not contain nulls" );	
 		}
 
-		if (	(ARR_SIZE(minArr) >NMAXDIM) || 
-			(ARR_SIZE(maxArr) >NMAXDIM) || 
-			(ARR_SIZE(lenArr) >NMAXDIM))
+		if (	(ARR_DIMS(minArr)[0] >NMAXDIM) || 
+			(ARR_DIMS(maxArr)[0] >NMAXDIM) || 
+			(ARR_DIMS(lenArr)[0] >NMAXDIM))
 		{
 			elog(ERROR, "Too many elements in the arrays");		
 		}
@@ -395,14 +391,13 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		}
 		for (i=0; i<nelemsMax;i++)
 		{
-			if (maxs[i]<=mins[i])
+			if (maxs[i] <= mins[i])
 			{
 				elog(ERROR, "The values of upper bin edges should be strictly larger than lower bin edges");
 			}
 		}
 
 		ndim = nelemsMin;
-		info->ndim = ndim;
 
 		for(i=0; i<ndim; i++)
 		{
@@ -414,24 +409,28 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 			elog(ERROR,"Array is to large");
 		}
 
-		info->nelem = nelem; 
 
 		if (weight_flag)
 		{
-			retarr = palloc(nelem * sizeof(float8));
-			memset(retarr, 0, sizeof(float8) * nelem);
-			retarr_d = (float8 *)retarr;		
+			histarr = palloc(nelem * sizeof(float8));
+			memset(histarr, 0, sizeof(float8) * nelem);
+			histarr_d = (float8 *)histarr;		
 			ncolumns = ndim + 1;
 		}
 		else
 		{
-			retarr = palloc(nelem * sizeof(int64_t));
-			memset(retarr, 0, sizeof(int64_t) * nelem);
-			retarr_i = (int64_t *)retarr;			
+			histarr = palloc(nelem * sizeof(int64_t));
+			memset(histarr, 0, sizeof(int64_t) * nelem);
+			histarr_i = (int64_t *)histarr;			
 			ncolumns = ndim;
 		}
-		
-		info->retarr = retarr;
+
+		info = (MyInfo *)palloc(sizeof(MyInfo));
+		info-> dims= dims;
+		info->lastpos = -1; 
+		info->nelem = nelem; 
+		info->ndim = ndim;		
+		info->histarr = histarr;
 		
 		values = palloc(sizeof(Datum) * ncolumns);
 		isnull = palloc(sizeof(bool) * ncolumns);
@@ -497,11 +496,11 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 					{
 						if (weight_flag)
 						{
-							retarr_d[histpos] += cur_weight;
+							histarr_d[histpos] += cur_weight;
 						}
 						else
 						{
-							retarr_i[histpos] += 1;
+							histarr_i[histpos] += 1;
 						}
 					}
 				}
@@ -528,44 +527,46 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 
 	funcctx = SRF_PERCALL_SETUP();
 	info = (MyInfo*)(funcctx->user_fctx);
-	retarr = info->retarr;
+	histarr = info->histarr;
 	if (weight_flag)
 	{
-		retarr_d = (float8 *)retarr;			
+		histarr_d = (float8 *)histarr;			
 	}
 	{
-		retarr_i = (int64_t *)retarr;		
+		histarr_i = (int64_t *)histarr;		
 	}
 	dims = info->dims;
 	nelem = info->nelem;
 	ndim = info->ndim;
 	lastpos = info->lastpos + 1;
-	returning = 0;
+	last_row = true;
 		
 	for(;lastpos < nelem; lastpos++)
 	{
 		if (weight_flag)
 		{
-			if (retarr_d[lastpos] != 0)
+			retval_d = histarr_d[lastpos];
+			if (retval_d != 0)
 			{
-				returning = 1 ;
+				last_row = false ;
 				break;
 			}	
 		}
 		else
 		{
-			if (retarr_i[lastpos] != 0)
+			retval_i = histarr_i[lastpos];
+			if (retval_i != 0)
 			{
-				returning = 1 ;
+				last_row = false ;
 				break;
 			}	
 		}
 	}
 
 	info->lastpos = lastpos;
-	if (returning == 0)
+	if (last_row)
 	{
-		pfree(retarr);
+		pfree(histarr);
 		SRF_RETURN_DONE(funcctx);
 	}
 	else
@@ -584,11 +585,11 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, int weight_flag)
 		}
 		if (weight_flag)
 		{
-			valuesOut[ndim] = Float8GetDatum(retarr_d[lastpos]); // copy by value again
+			valuesOut[ndim] = Float8GetDatum(retval_d); // copy by value again
 		}
 		else
 		{
-			valuesOut[ndim] = retarr_i[lastpos];
+			valuesOut[ndim] = retval_i;
 		}
 		isnullOut[ndim] = false;
 
