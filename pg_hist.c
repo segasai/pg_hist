@@ -439,14 +439,14 @@ Datum pg_hist_0(PG_FUNCTION_ARGS, int ndim, bool weight_flag)
 			if (dims[i]>(INT_MAX/nelem))
 			{
 				/* overflow */
-				elog(ERROR, "Array is too large");				
+				elog(ERROR, "The histogram is too large (>%ld elements)", MAXSIZE);				
 			}
 			nelem *= dims[i];
 		}
 
 		if (nelem > MAXSIZE)
 		{
-			elog(ERROR,"Array is too large");
+			elog(ERROR,"The histogram is too large (>%ld elements)", MAXSIZE);
 		}
 
 
