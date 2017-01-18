@@ -278,7 +278,7 @@ static int64_t processer(Datum *values, bool *isnull, TupleDesc td,
 		if (!isnull[i])
 		{
 			int posx = funcs[i](values[i], params + i);
-			if ((posx == -1) || (posx >= dims[i]))
+			if ((posx < 0) || (posx >= dims[i]))
 			{
 				pos0 = -1;
 				break;	
