@@ -1,3 +1,4 @@
+[![Build Status](https://travis-ci.org/segasai/pg_hist.svg?branch=master)](https://travis-ci.org/segasai/pg_hist)
 # pg_hist
 pg_hist  -- N-d histogramming functions for Postgresql
 
