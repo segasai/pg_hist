@@ -11,7 +11,7 @@ services:
 
 install: make && sudo make install
 
-script: if [ ${COVERITY_SCAN_BRANCH} != 1 ]; then make test ; fi
+script: make test
 
 compiler:
   - clang
