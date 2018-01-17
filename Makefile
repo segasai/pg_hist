@@ -7,6 +7,7 @@ DATA = $(wildcard scripts/*sql)
 PG_CONFIG = pg_config
 
 #PG_CPPFLAGS := -g -ggdb -O0
+SHLIB_LINK += $(filter -lm, $(LIBS))
 
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
