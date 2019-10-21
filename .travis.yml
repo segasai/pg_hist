@@ -1,3 +1,5 @@
+sudo: required
+dist: xenial
 language: c
 
 before_install:
@@ -32,6 +34,9 @@ compiler:
 
 env:
   matrix:
+    - PGVERSION=12
+    - PGVERSION=11
+    - PGVERSION=10
     - PGVERSION=9.6
     - PGVERSION=9.5
     - PGVERSION=9.4
